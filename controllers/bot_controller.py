@@ -1,4 +1,5 @@
 import asyncio
+import json
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -8,10 +9,11 @@ from models.user_mode_repository import UserModeRepository
 from models.stats_repository import StatsRepository
 from models.prompt_builder import PromptBuilder
 from services.gemini_service import GeminiService
+from services.http_audit_service import HttpAuditService
 
 
 class TelegramBotController:
-    """Контроллер: управляет командами Telegram, кнопками и связывает View с Model/Services."""
+    """Контроллер: управляет логикой бота и связывает обработку со службами."""
 
     def __init__(
         self,
@@ -21,6 +23,7 @@ class TelegramBotController:
         mode_repo: UserModeRepository,
         stats_repo: StatsRepository,
         ai_service: GeminiService,
+        audit_service: HttpAuditService,
     ):
         self.bot = bot
         self.dp = dp
@@ -28,6 +31,7 @@ class TelegramBotController:
         self.mode_repo = mode_repo
         self.stats_repo = stats_repo
         self.ai_service = ai_service
+        self.audit_service = audit_service
         self.is_processing: dict[int, bool] = {}
         self.bot_info: types.User | None = None
 
@@ -38,6 +42,7 @@ class TelegramBotController:
         self.dp.message(Command("clear"))(self.cmd_clear)
         self.dp.message(Command("mode"))(self.cmd_mode)
         self.dp.message(Command("stats"))(self.cmd_stats)
+        self.dp.message(Command("audit"))(self.cmd_audit)
         self.dp.callback_query(F.data.startswith("set_mode_"))(self.handle_mode_callback)
         self.dp.message()(self.handle_message)
 
@@ -45,7 +50,6 @@ class TelegramBotController:
         self.bot_info = await self.bot.get_me()
 
     def _get_mode_keyboard(self) -> InlineKeyboardMarkup:
-        """Создает инлайн-клавиатуру выбора стиля."""
         buttons = [
             [
                 InlineKeyboardButton(text="🤬 Быдло-пацан", callback_data="set_mode_bydlo"),
@@ -60,8 +64,8 @@ class TelegramBotController:
 
     async def cmd_start(self, message: types.Message) -> None:
         await message.answer(
-            "Салам! Я универсальный бот на базе Gemini.\n\n"
-            "Выбери стиль моего поведения через команду /mode или ниже:",
+            "Привет! Я бот на базе Gemini.\n\n"
+            "Выбери стиль общения с помощью команды /mode или ниже:",
             reply_markup=self._get_mode_keyboard()
         )
 
@@ -74,9 +78,28 @@ class TelegramBotController:
         )
 
     async def cmd_stats(self, message: types.Message) -> None:
-        """Выводит статистику использования и израсходованных токенов."""
         summary = self.stats_repo.get_summary_text()
         await message.answer(summary, parse_mode="Markdown")
+
+    async def cmd_audit(self, message: types.Message) -> None:
+        if not self.audit_service.logs:
+            await message.answer("🌐 **История HTTP-запросов пуста.**", parse_mode="Markdown")
+            return
+
+        last_log = self.audit_service.logs[-1]
+        req_headers_str = json.dumps(last_log.request_headers, ensure_ascii=False, indent=2)[:300]
+        resp_body_str = last_log.response_body[:400]
+
+        report = (
+            f"🌐 **HTTP Audit Log (Всего перехвачено: {len(self.audit_service.logs)}):**\n\n"
+            f"🔹 **URL:** `{last_log.url}`\n"
+            f"🔹 **Метод:** `{last_log.method}`\n"
+            f"🔹 **Код ответа:** `{last_log.status_code}`\n"
+            f"⏱ **Время:** `{last_log.timestamp}`\n\n"
+            f"📥 **Request Headers:**\n```json\n{req_headers_str}\n```\n"
+            f"📤 **Response Body:**\n```json\n{resp_body_str}\n```"
+        )
+        await message.answer(report, parse_mode="Markdown")
 
     async def handle_mode_callback(self, callback: types.CallbackQuery) -> None:
         mode_key = callback.data.replace("set_mode_", "")
@@ -120,11 +143,7 @@ class TelegramBotController:
 
     def _record_incoming_message(self, chat_id: int, message: types.Message) -> None:
         user_name = message.from_user.first_name or message.from_user.username or "Пользователь"
-        if message.forward_from or message.forward_from_chat:
-            fwd_author = message.forward_from.first_name if message.forward_from else "Переслано"
-            text = f"[Переслано от {fwd_author}]: {message.text}"
-        else:
-            text = f"{user_name}: {message.text}"
+        text = f"{user_name}: {message.text}"
         self.history_repo.add_message(chat_id, text)
 
     def _should_process(self, message: types.Message) -> bool:
@@ -163,17 +182,19 @@ class TelegramBotController:
             system_instruction=system_instruction
         )
         
-        # Логируем статистику токенов
         self.stats_repo.log_request(current_mode, in_tokens, out_tokens)
-        
         self.history_repo.add_message(chat_id, f"Бот: {response_text}")
         await message.reply(response_text)
 
     async def _handle_error(self, message: types.Message, e: Exception) -> None:
         err_msg = str(e)
+        chat_id = message.chat.id
+
         if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
-            await message.reply("Лимиты запросов превышены. Попробуй чуть позже.")
-        elif "503" in err_msg:
-            await message.reply("Сервера Gemini перегружены (503). Попробуй позже.")
+            self.history_repo.trim_history(chat_id, keep_last=2)
+            await message.reply(
+                "⚠️ **Превышен лимит запросов Google API (429).**\n"
+                "История диалога автоматически сокращена. Попробуй еще раз через пару секунд!"
+            )
         else:
             await message.reply(f"Произошла ошибка: {e}")

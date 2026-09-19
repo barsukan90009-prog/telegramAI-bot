@@ -1,37 +1,38 @@
+from collections import defaultdict
+
+
 class StatsRepository:
-    """Модель для сбора и агрегации статистики использования бота."""
+    """Репозиторий статистики расхода токенов по режимам."""
 
-    def __init__(self):
-        self.total_requests: int = 0
-        self.total_input_tokens: int = 0
-        self.total_output_tokens: int = 0
-        self.mode_usage: dict[str, int] = {}
+    def __init__(self) -> None:
+        self.requests_count: dict[str, int] = defaultdict(int)
+        self.input_tokens: dict[str, int] = defaultdict(int)
+        self.output_tokens: dict[str, int] = defaultdict(int)
 
-    def log_request(self, mode: str, input_tokens: int, output_tokens: int) -> None:
-        """Записывает данные о выполненном запросе."""
-        self.total_requests += 1
-        self.total_input_tokens += input_tokens
-        self.total_output_tokens += output_tokens
-        self.mode_usage[mode] = self.mode_usage.get(mode, 0) + 1
-
-    @property
-    def total_tokens(self) -> int:
-        return self.total_input_tokens + self.total_output_tokens
+    def log_request(self, mode: str, input_t: int, output_t: int) -> None:
+        """Регистрирует статистику вызова LLM."""
+        self.requests_count[mode] += 1
+        self.input_tokens[mode] += input_t
+        self.output_tokens[mode] += output_t
 
     def get_summary_text(self) -> str:
-        """Формирует красивый текстовый отчет."""
-        if self.total_requests == 0:
-            return "📊 **Статистика пока пуста.** Сделайте первый запрос!"
+        """Формирует текстовый отчёт со статистикой."""
+        if not self.requests_count:
+            return "📊 **Статистика вызовов пуста.**"
 
-        modes_stat = "\n".join(
-            f"  • {mode}: {count} раз" for mode, count in self.mode_usage.items()
-        )
+        total_req = sum(self.requests_count.values())
+        total_in = sum(self.input_tokens.values())
+        total_out = sum(self.output_tokens.values())
 
-        return (
-            "📊 **Статистика использования бота:**\n\n"
-            f"🔹 **Всего запросов:** `{self.total_requests}`\n"
-            f"📥 **Входные токены (Prompt):** `{self.total_input_tokens:,}`\n"
-            f"📤 **Выходные токены (Response):** `{self.total_output_tokens:,}`\n"
-            f"🧮 **Суммарно токенов:** `{self.total_tokens:,}`\n\n"
-            f"🎭 **Использование режимов:**\n{modes_stat}"
-        )
+        text = f"📊 **Статистика использования Gemini:**\n\n"
+        text += f"🔹 Всего запросов: `{total_req}`\n"
+        text += f"📥 Входные токены: `{total_in}`\n"
+        text += f"📤 Выходные токены: `{total_out}`\n\n"
+        text += "**По режимам:**\n"
+
+        for mode, count in self.requests_count.items():
+            in_t = self.input_tokens[mode]
+            out_t = self.output_tokens[mode]
+            text += f"• `{mode}`: {count} зап., in: {in_t}, out: {out_t}\n"
+
+        return text

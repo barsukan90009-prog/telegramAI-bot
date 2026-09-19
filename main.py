@@ -1,42 +1,42 @@
 import asyncio
-import logging
+import os
+import sys
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 
-import config
 from models.chat_repository import ChatHistoryRepository
 from models.user_mode_repository import UserModeRepository
 from models.stats_repository import StatsRepository
 from services.gemini_service import GeminiService
+from services.http_audit_service import HttpAuditService
 from controllers.bot_controller import TelegramBotController
 
-# ==========================================
-# ВКЛЮЧЕНИЕ ВЫВОДА ВСЕХ HTTP ЗАПРОСОВ
-# ==========================================
-# 1. Общий формат логов в консоли
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - [%(levelname)s] - %(name)s - %(message)s",
-)
+load_dotenv()
 
-# 2. Логирование HTTP-сессий (aiogram, httpx, urllib3)
-logging.getLogger("httpx").setLevel(logging.DEBUG)        # Логи запросов Google GenAI SDK (использует httpx)
-logging.getLogger("aiogram.event").setLevel(logging.DEBUG)  # Логи событий и запросов Telegram
-# ==========================================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+MODEL_NAME = os.getenv("MODEL_NAME", "gemini-1.5-flash")
+
+if not BOT_TOKEN or not GEMINI_API_KEY:
+    print("❌ Ошибка: Убедитесь, что BOT_TOKEN и GEMINI_API_KEY указаны в файле .env")
+    sys.exit(1)
 
 
-async def main():
-    bot = Bot(token=config.BOT_TOKEN)
-    dp = Dispatcher()
+async def main() -> None:
+    audit_service = HttpAuditService()
 
-    history_repo = ChatHistoryRepository(maxlen=config.MAX_HISTORY_LEN)
-    mode_repo = UserModeRepository()
+    history_repo = ChatHistoryRepository(max_history=10)
+    mode_repo = UserModeRepository(default_mode="bydlo")
     stats_repo = StatsRepository()
 
     ai_service = GeminiService(
-        api_key=config.GEMINI_API_KEY,
-        model_name=config.MODEL_NAME,
-        max_retries=config.MAX_RETRIES,
+        api_key=GEMINI_API_KEY,
+        model_name=MODEL_NAME,
+        audit_service=audit_service
     )
+
+    bot = Bot(token=BOT_TOKEN)
+    dp = Dispatcher()
 
     controller = TelegramBotController(
         bot=bot,
@@ -45,10 +45,14 @@ async def main():
         mode_repo=mode_repo,
         stats_repo=stats_repo,
         ai_service=ai_service,
+        audit_service=audit_service
     )
 
     await controller.initialize()
-    print(f"Запуск бота @{controller.bot_info.username} на {config.MODEL_NAME}...")
+
+    bot_user = controller.bot_info
+    print(f"Запуск бота @{bot_user.username} на {MODEL_NAME}...")
+
     await dp.start_polling(bot)
 
 

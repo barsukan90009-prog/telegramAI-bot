@@ -1,14 +1,14 @@
 class UserModeRepository:
-    """Модель для хранения выбранного режима работы бота для каждого чата."""
+    """Репозиторий для хранения выбранного режима/стиля общения каждого чата."""
 
-    DEFAULT_MODE = "bydlo"
-
-    def __init__(self):
-        # Храним {chat_id: "mode_key"}
+    def __init__(self, default_mode: str = "bydlo") -> None:
+        self.default_mode = default_mode
         self._modes: dict[int, str] = {}
 
-    def set_mode(self, chat_id: int, mode: str) -> None:
-        self._modes[chat_id] = mode
-
     def get_mode(self, chat_id: int) -> str:
-        return self._modes.get(chat_id, self.DEFAULT_MODE)
+        """Возвращает текущий режим пользователя или дефолтный."""
+        return self._modes.get(chat_id, self.default_mode)
+
+    def set_mode(self, chat_id: int, mode: str) -> None:
+        """Устанавливает новый режим общения для чата."""
+        self._modes[chat_id] = mode
