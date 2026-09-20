@@ -64,7 +64,7 @@ class TelegramBotController:
 
     async def cmd_start(self, message: types.Message) -> None:
         await message.answer(
-            "Привет! Я бот на базе Gemini.\n\n"
+            "Привет! Я бот Аноталий на базе Gemini.\n\n"
             "Выбери стиль общения с помощью команды /mode или ниже:",
             reply_markup=self._get_mode_keyboard()
         )
